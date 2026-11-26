@@ -108,6 +108,7 @@ ol.help{margin:0;padding-left:20px;font-size:14px;display:grid;gap:6px}
 .missed span{font-size:13px;border:1px solid var(--line);border-radius:999px;padding:2px 9px}
 .missed b{color:var(--bad)}
 [hidden]{display:none!important}
+.fbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;font-size:14px;border:1px dashed var(--sea);border-radius:10px;padding:8px 10px;background:var(--sea-soft)}
 @media (max-width:420px){.row{grid-template-columns:1fr}.row label{margin-bottom:-6px}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
 <style>body{margin:0}</style>
@@ -151,6 +152,7 @@ ol.help{margin:0;padding-left:20px;font-size:14px;display:grid;gap:6px}
         <button class="btn" id="nextBtn" aria-label="Next sentence"><svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg></button>
       </div>
       <div class="counter"><label for="posInput">Sentence</label><input id="posInput" type="number" min="1" inputmode="numeric"> <span>of <b id="posTotal">0</b></span></div>
+      <div class="fbar" hidden><span class="ftxt"></span> <button class="small-btn clearF">Show all sentences</button></div>
       <div class="stats"><span>Today <b id="stToday">0</b></span><span>Heard at least once <b id="stSeen">0</b> of <b id="stTotal">0</b></span></div>
     </section>
 
@@ -222,6 +224,7 @@ ol.help{margin:0;padding-left:20px;font-size:14px;display:grid;gap:6px}
         </div>
         <p class="note" id="sAlts" hidden></p>
       </div>
+      <div class="fbar" hidden><span class="ftxt"></span> <button class="small-btn clearF">Show all sentences</button></div>
       <div class="counter"><label for="sPos">Sentence</label><input id="sPos" type="number" min="1" inputmode="numeric"> <span>of <b id="sPosTotal">0</b></span></div>
     </section>
 
@@ -362,9 +365,23 @@ function buildTopics(){
   };
 }
 function filtersChanged(){ saveCfg(); if (playing) setPlaying(false); L = makeRound('listen'); P = makeRound('speak'); updateMatch(); showL(); showS(); }
+function filterText(){
+  const p = [];
+  if (cfg.word.trim()) p.push('word “' + cfg.word.trim() + '”');
+  if (cfg.topics.length) p.push(cfg.topics.length === 1 ? 'topic “' + TOPICS[cfg.topics[0]] + '”' : cfg.topics.length + ' topics');
+  if (cfg.level > 0) p.push('words used ' + cfg.level + '+ times');
+  if (cfg.favOnly) p.push('favourites only');
+  return p.join(', ');
+}
 function updateMatch(){
+  const ft = filterText();
+  document.querySelectorAll('.fbar').forEach(b => { b.hidden = !ft; b.querySelector('.ftxt').textContent = ft ? `Filter on: ${ft} – ${L.order.length.toLocaleString('en')} of ${S.length.toLocaleString('en')} sentences.` : ''; });
   $('#match').textContent = L.order.length ? `${L.order.length.toLocaleString('en')} sentences match.` : 'No sentences match. Remove a filter.';
 }
+document.querySelectorAll('.clearF').forEach(b => b.onclick = () => {
+  cfg.topics = []; cfg.level = 0; cfg.word = ''; cfg.favOnly = false;
+  applyCfgToUI(); buildTopics(); filtersChanged();
+});
 $('#restartBtn').onclick = () => { if (playing) setPlaying(false); L.pos = 0; saveRound('listen', L); showL(); $('#match').textContent = 'Back to sentence 1, same order.'; };
 $('#shuffleBtn').onclick = () => { if (playing) setPlaying(false); L = makeRound('listen'); showL(); $('#match').textContent = 'New random order. Starting at sentence 1.'; };
 
@@ -622,6 +639,7 @@ $('#sTypeForm').onsubmit = e => { e.preventDefault(); clearTimeout(typeTimer); c
 const NativeSR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let engine = NativeSR ? 'native' : 'none', dict = null, recording = false, recRun = 0;
 let recText = '', recTimer = 0, silenceTimer = 0, rec = null, micStream = null;
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
 try{
   if (window.claude && window.claude.use){
     window.claude.use('dictation').then(d => { dict = d; if (engine === 'none' && d) engine = 'dictation'; engineNote(); }).catch(() => {});
@@ -689,7 +707,7 @@ async function startFlow(){
   if (engine === 'none'){ $('#sTyped').focus(); return; }
   const my = ++recRun;
   // keep one microphone stream open for the whole visit, so the browser asks only once
-  if (!micStream && navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
+  if (!IS_ANDROID && !micStream && navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
     try{ micStream = await navigator.mediaDevices.getUserMedia({audio:true}); }catch(e){}
     if (my !== recRun) return;
   }
@@ -697,7 +715,7 @@ async function startFlow(){
   beep(); await wait(250); if (my !== recRun) return;
   recText = '';
   try{
-    rec = new NativeSR(); rec.lang = 'nb-NO'; rec.interimResults = true; rec.continuous = true; rec.maxAlternatives = 1;
+    rec = new NativeSR(); rec.lang = 'nb-NO'; rec.interimResults = true; rec.continuous = !IS_ANDROID; rec.maxAlternatives = 1;
   }catch(e){ engine = dict ? 'dictation' : 'none'; engineNote(); return; }
   let finals = '';
   rec.onresult = ev => {
@@ -716,7 +734,7 @@ async function startFlow(){
       stopRec(true);
       if (dict){ engine = 'dictation'; engineNote(); sStage('idle', 'Press the microphone to speak'); }
       else { engine = 'none'; engineNote(); }
-    } else if (ev.error === 'no-speech'){ finish(i, my); }
+    } else if (ev.error === 'no-speech'){ status('No speech was detected. Speak right after the beep, a bit louder or closer to the phone.'); finish(i, my); }
     else { stopRec(true); sStage('idle', 'Microphone did not work – try “Voice typing on my keyboard” in Speaking settings'); }
   };
   rec.onend = () => { if (my === recRun && recording) finish(i, my); };
